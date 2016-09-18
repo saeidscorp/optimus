@@ -9,13 +9,10 @@
       (str/replace "\n" "\\n")))
 
 (defn looks-like-already-minified
-  "Files with a single line over 5000 characters are considered already
-  minified, and skipped. This avoid issues with huge bootstrap.css files
-  and its ilk."
-  [contents]
-  (->> contents
-       (str/split-lines)
-       (some (fn [^String s] (> (.length s) 5000)))))
+  "Files with .min.js and .min.css extensions are considered as already minified."
+  [^String path contents]
+  (or (.endsWith path ".min.js")
+      (.endsWith path ".min.css")))
 
 (defmacro with-context
   "Calls js/cleanup-engine on an already created context
@@ -72,13 +69,16 @@ usage:
      (.eval engine uglify)
      engine))
 
-(defn- run-script-with-error-handling [context script file-path]
-  (throw-engine-exception
-   (try
-     (.eval context script)
-     (catch Exception e
-       (str "ERROR: " (.getMessage e))))
-   file-path))
+(defn- run-script-with-error-handling [context script file-path options]
+  (let [start  (System/currentTimeMillis)
+        result (throw-engine-exception
+                 (try
+                   (.eval context script)
+                   (catch Exception e
+                     (str "ERROR: " (.getMessage e))))
+                 file-path)]
+    (when (:verbose options) (println "- Resource:" file-path "took" (- (System/currentTimeMillis) start) "ms"))
+    result))
 
 (defn minify-js
   ([js] (minify-js js {}))
@@ -86,9 +86,9 @@ usage:
    (with-context [context (create-uglify-context)]
      (minify-js context js options)))
   ([context js options]
-   (if (looks-like-already-minified js)
+   (if (looks-like-already-minified (:path options) js)
      js
-     (run-script-with-error-handling context (js-minify-code js (:uglify-js options)) (:path options)))))
+     (run-script-with-error-handling context (js-minify-code js (:uglify-js options)) (:path options) options))))
 
 (defn minify-js-asset
   [context asset options]
@@ -119,7 +119,7 @@ var console = {
 (function () {
     try {
         var CleanCSS = require('clean-css');
-        var source = '" (escape (normalize-line-endings css)) "';
+        var source = '" (prepare-css-source css) "';
         var options = {
             processImport: false,
             aggressiveMerging: " (:aggressive-merging options true) ",
@@ -153,9 +153,9 @@ var console = {
    (with-context [context (create-clean-css-context)]
      (minify-css context css options)))
   ([context css options]
-   (if (looks-like-already-minified css)
+   (if (looks-like-already-minified (:path options) css)
      css
-     (run-script-with-error-handling context (css-minify-code css (:clean-css options)) (:path options)))))
+     (run-script-with-error-handling context (css-minify-code css (:clean-css options)) (:path options) options))))
 
 (defn minify-css-asset
   [context asset options]
@@ -168,4 +168,4 @@ var console = {
   ([assets] (minify-css-assets assets {}))
   ([assets options]
    (with-context [context (create-clean-css-context)]
-     (doall (map #(minify-css-asset context % options) assets)))))
+                 (doall (map #(minify-css-asset context % options) assets)))))
